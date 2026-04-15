@@ -1,0 +1,190 @@
+// --- CONFIGURATION ---
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// --- ENUMS (LES CHOIX) ---
+
+enum Role {
+  SUPER_ADMIN    // Nta (DilWeb Team)
+  ADMIN_PHARMA   // L-Pharmacien l-massaoul
+  STAFF_PHARMA   // L-khdam f l-pharmacie
+  CLIENT         // L-mrid / L-mousstahlik
+}
+
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  READY
+  COMPLETED
+  CANCELLED
+}
+
+enum CreditStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+}
+
+// --- AUTH & ACTEURS (HERITAGE) ---
+
+model User {
+  id            String      @id @default(cuid())
+  email         String      @unique
+  password      String
+  role          Role        @default(CLIENT)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  // Heritage Relations (1-to-1)
+  superAdmin    SuperAdmin?
+  staffProfile  Staff?
+  clientProfile Client?
+}
+
+model SuperAdmin {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Staff {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  pharmacyId  String
+  pharmacy    Pharmacy @relation(fields: [pharmacyId], references: [id])
+  
+  position    String?  // ex: "Pharmacien titulaire", "Préparateur"
+  isOwner     Boolean  @default(false)
+}
+
+model Client {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  phone         String?
+  address       String?
+  city          String?
+  cin           String?  @unique
+  isChronic     Boolean  @default(false) // Pour les traitements de longue durée
+
+  orders        Order[]
+  credits       Credit[]       // Le "Carnet" de dettes du client
+  prescriptions Prescription[]
+}
+
+// --- ORGANISATION (PHARMACIE) ---
+
+model Pharmacy {
+  id          String   @id @default(cuid())
+  name        String
+  licenseNum  String   @unique // Numéro de licence professionnelle
+  address     String
+  city        String
+  phone       String
+  logo        String?
+  
+  staff       Staff[]
+  products    Product[]
+  orders      Order[]
+  credits     Credit[] // Toutes les dettes enregistrées dans cette pharmacie
+  createdAt   DateTime @default(now())
+}
+
+// --- INVENTAIRE (STOCK) ---
+
+model Product {
+  id           String   @id @default(cuid())
+  name         String
+  brand        String?
+  description  String?
+  price        Float    // Prix Public Maroc (PPM)
+  stock        Int      @default(0)
+  minStock     Int      @default(5)  // Alerte si stock < minStock
+  expiryDate   DateTime // Pour les alertes péremption
+  category     String?  // ex: Antibiotique, Vitamine, Para
+  
+  pharmacyId   String
+  pharmacy     Pharmacy @relation(fields: [pharmacyId], references: [id], onDelete: Cascade)
+  
+  orderItems   OrderItem[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// --- COMMANDES & VENTES ---
+
+model Order {
+  id          String      @id @default(cuid())
+  status      OrderStatus @default(PENDING)
+  totalAmount Float
+  
+  clientId    String
+  client      Client      @relation(fields: [clientId], references: [id])
+  
+  pharmacyId  String
+  pharmacy    Pharmacy    @relation(fields: [pharmacyId], references: [id])
+  
+  items       OrderItem[]
+  prescription Prescription? // Si la commande contient une ordonnance
+  
+  createdAt   DateTime    @default(now())
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  
+  quantity  Int
+  price     Float   // Prix au moment de l'achat
+}
+
+// --- LE CARNET (CREDITS & DETTES) ---
+
+model Credit {
+  id          String       @id @default(cuid())
+  amount      Float        // Montant de la dette
+  paidAmount  Float        @default(0) // Ce que le client a déjà payé
+  status      CreditStatus @default(UNPAID)
+  note        String?      // ex: "Dwa dial l-tansion dial Mars"
+  
+  clientId    String
+  client      Client       @relation(fields: [clientId], references: [id])
+  
+  pharmacyId  String
+  pharmacy    Pharmacy     @relation(fields: [pharmacyId], references: [id])
+  
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+// --- MEDICAL (AI SCANNER) ---
+
+model Prescription {
+  id             String   @id @default(cuid())
+  imageUrl       String   // Lien Supabase Storage
+  extractedText  String?  // Texte extrait par l'AI
+  isValidated    Boolean  @default(false) // Validée par le pharmacien
+  
+  clientId       String
+  client         Client   @relation(fields: [clientId], references: [id])
+  
+  orderId        String?  @unique
+  order          Order?   @relation(fields: [orderId], references: [id])
+  
+  createdAt      DateTime @default(now())
+}
